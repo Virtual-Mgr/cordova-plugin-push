@@ -8,6 +8,12 @@
 #import "PushPlugin.h"
 #import "PushPluginConstants.h"
 #import <objc/runtime.h>
+#import <os/log.h>
+
+// Public-tagged log macro — iOS 15+ Console redacts NSLog %@/%s output as
+// <private> by default. os_log with %{public}s explicitly opts out so the
+// diagnostic dumps are actually readable.
+#define PPLOG(fmt, ...) os_log(OS_LOG_DEFAULT, "[PushPlugin] " fmt, ##__VA_ARGS__)
 
 // Captured during the swizzled didFinishLaunchingWithOptions:. PushPlugin's
 // pluginInitialize consumes this once via +pushPluginConsumeLaunchNotification.
@@ -23,7 +29,7 @@ static NSDictionary *_pushPluginCapturedLaunchNotification = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         Class class = [self class];
-        NSLog(@"[PushPlugin] +load: installing swizzles on class %@", NSStringFromClass(class));
+        PPLOG("+load: installing swizzles on class %{public}s", [NSStringFromClass(class) UTF8String]);
 
         // Swizzle init — sets the UNUserNotificationCenter delegate before
         // anything else can fire user-notification callbacks.
@@ -41,7 +47,7 @@ static NSDictionary *_pushPluginCapturedLaunchNotification = nil;
             } else {
                 method_exchangeImplementations(original, swizzled);
             }
-            NSLog(@"[PushPlugin] +load: init swizzle installed (didAdd=%d)", didAddMethod);
+            PPLOG("+load: init swizzle installed (didAdd=%d)", didAddMethod);
         }
 
         // Swizzle application:didFinishLaunchingWithOptions: — captures any
@@ -73,9 +79,9 @@ static NSDictionary *_pushPluginCapturedLaunchNotification = nil;
                 } else {
                     method_exchangeImplementations(original, swizzled);
                 }
-                NSLog(@"[PushPlugin] +load: didFinishLaunchingWithOptions swizzle installed (didAdd=%d)", didAddMethod);
+                PPLOG("+load: didFinishLaunchingWithOptions swizzle installed (didAdd=%d)", didAddMethod);
             } else {
-                NSLog(@"[PushPlugin] +load: WARNING — AppDelegate has no application:didFinishLaunchingWithOptions:, cold-start tap payload cannot be captured.");
+                PPLOG("+load: WARNING — AppDelegate has no application:didFinishLaunchingWithOptions:, cold-start tap payload cannot be captured.");
             }
         }
     });
@@ -104,8 +110,8 @@ static NSString *_dumpDict(NSDictionary *dict) {
 
 - (BOOL)pushPluginSwizzledApplication:(UIApplication *)application
         didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    NSLog(@"[PushPlugin] swizzledDidFinishLaunching: launchOptions has %lu keys=%@",
-          (unsigned long)launchOptions.count, launchOptions.allKeys);
+    PPLOG("swizzledDidFinishLaunching: launchOptions has %lu keys=%{public}s",
+          (unsigned long)launchOptions.count, [launchOptions.allKeys.description UTF8String]);
 
     // Capture the launch-time remote notification payload — surviving copy
     // for the cold-start tap path. Consumed exactly once by
@@ -113,10 +119,10 @@ static NSString *_dumpDict(NSDictionary *dict) {
     NSDictionary *launchUserInfo = launchOptions[UIApplicationLaunchOptionsRemoteNotificationKey];
     if ([launchUserInfo isKindOfClass:[NSDictionary class]] && launchUserInfo.count > 0) {
         _pushPluginCapturedLaunchNotification = [launchUserInfo copy];
-        NSLog(@"[PushPlugin] swizzledDidFinishLaunching: CAPTURED remote-notification launchOption:\n%s",
+        PPLOG("swizzledDidFinishLaunching: CAPTURED remote-notification launchOption:\n%{public}s",
               [_dumpDict(launchUserInfo) UTF8String]);
     } else {
-        NSLog(@"[PushPlugin] swizzledDidFinishLaunching: no UIApplicationLaunchOptionsRemoteNotificationKey in launchOptions");
+        PPLOG("swizzledDidFinishLaunching: no UIApplicationLaunchOptionsRemoteNotificationKey in launchOptions");
     }
     // Call original (this is not recursion — see init swizzle comment above).
     return [self pushPluginSwizzledApplication:application didFinishLaunchingWithOptions:launchOptions];
@@ -126,10 +132,10 @@ static NSString *_dumpDict(NSDictionary *dict) {
     NSDictionary *captured = _pushPluginCapturedLaunchNotification;
     _pushPluginCapturedLaunchNotification = nil;
     if (captured) {
-        NSLog(@"[PushPlugin] +pushPluginConsumeLaunchNotification: returning:\n%s",
+        PPLOG("+pushPluginConsumeLaunchNotification: returning:\n%{public}s",
               [_dumpDict(captured) UTF8String]);
     } else {
-        NSLog(@"[PushPlugin] +pushPluginConsumeLaunchNotification: returning nil (already consumed or never captured)");
+        PPLOG("+pushPluginConsumeLaunchNotification: returning nil (already consumed or never captured)");
     }
     return captured;
 }
