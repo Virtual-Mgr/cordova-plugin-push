@@ -9,6 +9,12 @@
 #import "PushPluginConstants.h"
 #import <objc/runtime.h>
 
+// Captured during the swizzled didFinishLaunchingWithOptions:. PushPlugin's
+// pluginInitialize consumes this once via +pushPluginConsumeLaunchNotification.
+// Plain static — only written on the main thread during launch and read once
+// after pluginInitialize, no synchronization needed.
+static NSDictionary *_pushPluginCapturedLaunchNotification = nil;
+
 @implementation AppDelegate (PushPlugin)
 
 // its dangerous to override a method from within a category.
@@ -18,18 +24,56 @@
     dispatch_once(&onceToken, ^{
         Class class = [self class];
 
-        SEL originalSelector = @selector(init);
-        SEL swizzledSelector = @selector(pushPluginSwizzledInit);
+        // Swizzle init — sets the UNUserNotificationCenter delegate before
+        // anything else can fire user-notification callbacks.
+        {
+            SEL originalSelector = @selector(init);
+            SEL swizzledSelector = @selector(pushPluginSwizzledInit);
 
-        Method original = class_getInstanceMethod(class, originalSelector);
-        Method swizzled = class_getInstanceMethod(class, swizzledSelector);
+            Method original = class_getInstanceMethod(class, originalSelector);
+            Method swizzled = class_getInstanceMethod(class, swizzledSelector);
 
-        BOOL didAddMethod = class_addMethod(class, originalSelector, method_getImplementation(swizzled), method_getTypeEncoding(swizzled));
+            BOOL didAddMethod = class_addMethod(class, originalSelector, method_getImplementation(swizzled), method_getTypeEncoding(swizzled));
 
-        if (didAddMethod) {
-            class_replaceMethod(class, swizzledSelector, method_getImplementation(original), method_getTypeEncoding(original));
-        } else {
-            method_exchangeImplementations(original, swizzled);
+            if (didAddMethod) {
+                class_replaceMethod(class, swizzledSelector, method_getImplementation(original), method_getTypeEncoding(original));
+            } else {
+                method_exchangeImplementations(original, swizzled);
+            }
+        }
+
+        // Swizzle application:didFinishLaunchingWithOptions: — captures any
+        // remote-notification payload from launchOptions before the app's
+        // own didFinishLaunching runs. This is the only path that reliably
+        // delivers a cold-start tap payload to a Cordova plugin: by the
+        // time PushPlugin.pluginInitialize registers its NSNotificationCenter
+        // observers, iOS has already called didReceiveNotificationResponse
+        // and posted to a NotificationCenter with no observers. The launch-
+        // options key is the surviving copy.
+        //
+        // Only swizzle if the host AppDelegate (or its parent CDVAppDelegate)
+        // already implements the selector. CDVAppDelegate always does, so
+        // this branch should always be taken in a Cordova app — guarding
+        // against the unlikely case prevents an infinite-recursion crash
+        // if class_addMethod adds our swizzled impl as the original (then
+        // calling [self pushPluginSwizzledApplication:...] would re-enter).
+        {
+            SEL originalSelector = @selector(application:didFinishLaunchingWithOptions:);
+            SEL swizzledSelector = @selector(pushPluginSwizzledApplication:didFinishLaunchingWithOptions:);
+
+            Method original = class_getInstanceMethod(class, originalSelector);
+            Method swizzled = class_getInstanceMethod(class, swizzledSelector);
+
+            if (original != NULL) {
+                BOOL didAddMethod = class_addMethod(class, originalSelector, method_getImplementation(swizzled), method_getTypeEncoding(swizzled));
+                if (didAddMethod) {
+                    class_replaceMethod(class, swizzledSelector, method_getImplementation(original), method_getTypeEncoding(original));
+                } else {
+                    method_exchangeImplementations(original, swizzled);
+                }
+            } else {
+                NSLog(@"[PushPlugin] WARNING: AppDelegate has no application:didFinishLaunchingWithOptions: — cold-start tap payload cannot be captured. (CDVAppDelegate provides one; this is unexpected.)");
+            }
         }
     });
 }
@@ -40,6 +84,25 @@
     // This actually calls the original init method over in AppDelegate. Equivilent to calling super
     // on an overrided method, this is not recursive, although it appears that way. neat huh?
     return [self pushPluginSwizzledInit];
+}
+
+- (BOOL)pushPluginSwizzledApplication:(UIApplication *)application
+        didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    // Capture the launch-time remote notification payload — surviving copy
+    // for the cold-start tap path. Consumed exactly once by
+    // PushPlugin.pluginInitialize → +pushPluginConsumeLaunchNotification.
+    NSDictionary *launchUserInfo = launchOptions[UIApplicationLaunchOptionsRemoteNotificationKey];
+    if ([launchUserInfo isKindOfClass:[NSDictionary class]] && launchUserInfo.count > 0) {
+        _pushPluginCapturedLaunchNotification = [launchUserInfo copy];
+    }
+    // Call original (this is not recursion — see init swizzle comment above).
+    return [self pushPluginSwizzledApplication:application didFinishLaunchingWithOptions:launchOptions];
+}
+
++ (NSDictionary *)pushPluginConsumeLaunchNotification {
+    NSDictionary *captured = _pushPluginCapturedLaunchNotification;
+    _pushPluginCapturedLaunchNotification = nil;
+    return captured;
 }
 
 - (void)application:(UIApplication *)application didRegisterForRemoteNotificationsWithDeviceToken:(NSData *)deviceToken {

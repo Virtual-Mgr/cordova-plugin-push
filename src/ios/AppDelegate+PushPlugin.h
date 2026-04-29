@@ -16,4 +16,17 @@
     didReceiveRemoteNotification:(NSDictionary *)userInfo
           fetchCompletionHandler:(void (^)(UIBackgroundFetchResult))completionHandler;
 
+/**
+ * Returns and clears the cold-start remote-notification payload captured
+ * from `launchOptions[UIApplicationLaunchOptionsRemoteNotificationKey]`
+ * during didFinishLaunching. Called once by PushPlugin.pluginInitialize
+ * to seed self.notificationMessage so the cold-start tap fires through
+ * to JS even though the plugin's NSNotificationCenter observers register
+ * after the AppDelegate's didReceiveNotificationResponse has already run.
+ *
+ * Returns nil if there was no remote notification in launchOptions
+ * (i.e. the app was launched normally, not from a tap).
+ */
++ (NSDictionary *)pushPluginConsumeLaunchNotification;
+
 @end

@@ -27,6 +27,7 @@
 #import "PushPluginConstants.h"
 #import "PushPluginFCM.h"
 #import "PushPluginSettings.h"
+#import "AppDelegate+PushPlugin.h"
 
 @interface PushPlugin ()
 
@@ -86,6 +87,27 @@
                                              selector:@selector(didReceiveNotificationResponse:)
                                                  name:PluginDidReceiveNotificationResponse
                                                object:nil];
+
+    // Cold-start tap recovery. didFinishLaunchingWithOptions's launchOptions
+    // is the only path where the tap-to-launch payload survives long enough
+    // for a Cordova plugin to see it: by the time pluginInitialize runs (on
+    // the first cordova.exec call from JS), iOS has already called
+    // didReceiveNotificationResponse and posted to NSNotificationCenter
+    // BEFORE this plugin had registered its observers above — so the post is
+    // dropped on the floor. The AppDelegate category swizzles
+    // didFinishLaunchingWithOptions: and stashes the launch-time userInfo;
+    // we consume it once here and seed self.notificationMessage so init's
+    // pending-startup-notification path (~line 192) fires it through to JS.
+    NSDictionary *launchUserInfo = [AppDelegate pushPluginConsumeLaunchNotification];
+    if (launchUserInfo) {
+        NSLog(@"[PushPlugin] Recovered cold-start launch notification: %@", launchUserInfo);
+        NSMutableDictionary *seeded = [launchUserInfo mutableCopy];
+        // Mark coldstart on the message so notificationReceived's additionalData
+        // shows coldstart=true for this delivery, matching what a
+        // didReceiveNotificationResponse path would produce.
+        self.coldstart = YES;
+        self.notificationMessage = [seeded copy];
+    }
 }
 
 - (void)unregister:(CDVInvokedUrlCommand *)command {
