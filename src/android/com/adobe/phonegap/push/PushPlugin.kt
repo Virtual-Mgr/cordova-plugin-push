@@ -426,6 +426,13 @@ class PushPlugin : CordovaPlugin() {
       PushConstants.DELETE_CHANNEL -> executeActionDeleteChannel(data, callbackContext)
       PushConstants.LIST_CHANNELS -> executeActionListChannels(callbackContext)
       PushConstants.CLEAR_NOTIFICATION -> executeActionClearNotification(data, callbackContext)
+      "acknowledgeColdStart" -> {
+        // No-op on Android — gCachedExtras already provides cross-page-load
+        // delivery without the iOS-specific armed-redelivery problem. The
+        // method exists to keep the JS API uniform; calling it on Android
+        // is harmless.
+        callbackContext.success("ok")
+      }
       else -> {
         Log.e(TAG, "Execute: Invalid Action $action")
         callbackContext.sendPluginResult(PluginResult(PluginResult.Status.INVALID_ACTION))

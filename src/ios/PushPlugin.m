@@ -34,6 +34,13 @@
 // <private> by default. os_log with %{public}s explicitly opts out.
 #define PPLOG(fmt, ...) os_log(OS_LOG_DEFAULT, "[PushPlugin] " fmt, ##__VA_ARGS__)
 
+// Maximum age (seconds) of a captured cold-start tap payload before it's
+// discarded. Cold-start re-delivery re-seeds notificationMessage from the
+// pendingColdStartMessage on each init: call, until either JS ACKs receipt
+// or this TTL expires. 30s comfortably covers vmplayer's slowest bootstrap
+// path (settings page → OAuth → dashboard).
+static const NSTimeInterval PushPluginColdStartTTLSeconds = 30.0;
+
 // Dump a dict as a JSON string so iOS Console doesn't redact it as <private>.
 static NSString *_dumpDictAsJSON(NSDictionary *dict) {
     if (!dict) return @"(nil)";
@@ -51,6 +58,19 @@ static NSString *_dumpDictAsJSON(NSDictionary *dict) {
 
 @property (nonatomic, strong) NSDictionary *launchNotification;
 @property (nonatomic, strong) NSDictionary *notificationMessage;
+
+// Cold-start tap pending-redelivery copy. Captured by pluginInitialize
+// from the swizzled didFinishLaunchingWithOptions's launchOptions; held
+// SEPARATELY from notificationMessage so we can re-seed notificationMessage
+// across multiple init: calls (vmplayer's bootstrap goes through 2-3
+// WebView page loads — Cordova settings page → dashboard — and only the
+// final page has the chat handler subscribed). Cleared once a JS context
+// successfully ACKs receipt via the new -acknowledgeColdStart command,
+// OR automatically after PushPluginColdStartTTL seconds elapsed since
+// capture (defense against an indefinitely "armed" notification that
+// would re-fire on every subsequent init: forever).
+@property (nonatomic, strong) NSDictionary *pendingColdStartMessage;
+@property (nonatomic, strong) NSDate *pendingColdStartCapturedAt;
 @property (nonatomic, strong) NSMutableDictionary *handlerObj;
 @property (nonatomic, strong) UNNotification *previousNotification;
 
@@ -125,6 +145,14 @@ static NSString *_dumpDictAsJSON(NSDictionary *dict) {
         // didReceiveNotificationResponse path would produce.
         self.coldstart = YES;
         self.notificationMessage = [seeded copy];
+        // Stash a separate copy that survives notificationReceived clearing
+        // notificationMessage. Each init: call from a fresh WebView context
+        // re-seeds notificationMessage from this copy, so the chat-aware
+        // page eventually gets the message even if intermediate pages
+        // (settings/login) consumed it first into a JS context that's now
+        // gone.
+        self.pendingColdStartMessage = [seeded copy];
+        self.pendingColdStartCapturedAt = [NSDate date];
     } else {
         PPLOG("pluginInitialize: no launch notification was captured during didFinishLaunching");
     }
@@ -139,6 +167,25 @@ static NSString *_dumpDictAsJSON(NSDictionary *dict) {
         [[UIApplication sharedApplication] unregisterForRemoteNotifications];
         [self successWithMessage:command.callbackId withMsg:@"unregistered"];
     }
+}
+
+// JS-callable: acknowledge that the cold-start tap payload has been
+// delivered to a handler that will act on it. Clears the pending re-delivery
+// so subsequent init: calls don't fire it again.
+//
+// Without this, the only termination path is the TTL — which means a chat
+// tap re-fires through every WebView reload for up to 30s. Calling this
+// from the chat-aware page after handling the notification keeps the UX
+// clean.
+- (void)acknowledgeColdStart:(CDVInvokedUrlCommand *)command {
+    if (self.pendingColdStartMessage) {
+        PPLOG("acknowledgeColdStart: clearing pending cold-start payload");
+    } else {
+        PPLOG("acknowledgeColdStart: no pending payload to clear");
+    }
+    self.pendingColdStartMessage = nil;
+    self.pendingColdStartCapturedAt = nil;
+    [self successWithMessage:command.callbackId withMsg:@"ok"];
 }
 
 - (void)subscribe:(CDVInvokedUrlCommand *)command {
@@ -187,6 +234,34 @@ static NSString *_dumpDictAsJSON(NSDictionary *dict) {
     }
 
     self.callbackId = command.callbackId;
+
+    // Cold-start tap re-delivery. vmplayer's bootstrap goes through several
+    // WebView page loads (settings/login → dashboard); only the final page
+    // has the chat handler subscribed. The original 1.0 logic clears
+    // notificationMessage after the FIRST send, so a kill+tap delivers the
+    // payload to whichever JS context happens to call init: first — which
+    // is likely an intermediate page that has no chat code. By the time
+    // the dashboard arrives and calls init: again, the payload is gone.
+    //
+    // Fix: re-seed notificationMessage from the pending cold-start copy
+    // each time init: runs, until either the JS layer ACKs delivery via
+    // -acknowledgeColdStart OR the TTL expires. The init: method's
+    // existing pending-startup-notification path (~50 lines below) then
+    // schedules notificationReceived after 0.5s, exactly as for a first-
+    // time delivery.
+    if (self.pendingColdStartMessage != nil) {
+        NSTimeInterval age = -[self.pendingColdStartCapturedAt timeIntervalSinceNow];
+        if (age > PushPluginColdStartTTLSeconds) {
+            PPLOG("init: pendingColdStartMessage expired (age=%.1fs > TTL=%.1fs), discarding",
+                  age, (double)PushPluginColdStartTTLSeconds);
+            self.pendingColdStartMessage = nil;
+            self.pendingColdStartCapturedAt = nil;
+        } else if (self.notificationMessage == nil) {
+            PPLOG("init: re-seeding notificationMessage from pendingColdStartMessage (age=%.1fs)", age);
+            self.notificationMessage = [self.pendingColdStartMessage copy];
+            self.coldstart = YES;
+        }
+    }
 
     if ([settings voipEnabled]) {
         [self.commandDelegate runInBackground:^ {

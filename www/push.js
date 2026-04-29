@@ -96,6 +96,23 @@ var PushNotification = /*#__PURE__*/function () {
     }
 
     /**
+     * Acknowledge a cold-start tap notification. Tells the native plugin
+     * that the launch payload has been delivered to a handler that will
+     * act on it, so subsequent init() calls (from later WebView page
+     * loads) don't re-fire the same notification.
+     *
+     * iOS only — Android already has a different cache mechanism.
+     * No-op on platforms without a native implementation.
+     */
+  }, {
+    key: "acknowledgeColdStart",
+    value: function acknowledgeColdStart() {
+      var successCallback = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : function () {};
+      var errorCallback = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : function () {};
+      exec(successCallback, errorCallback, 'PushNotification', 'acknowledgeColdStart', []);
+    }
+
+    /**
      * subscribe to a topic
      * @param   {String}      topic               topic to subscribe
      * @param   {Function}    successCallback     success callback
