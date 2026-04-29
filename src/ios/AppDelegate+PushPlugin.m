@@ -89,9 +89,22 @@ static NSDictionary *_pushPluginCapturedLaunchNotification = nil;
     return [self pushPluginSwizzledInit];
 }
 
+// Dumps a dict as a JSON string via %s so iOS Console doesn't redact it
+// as <private>. Falls back to %@ if serialization fails (e.g. non-JSON
+// values like blocks/closures inside).
+static NSString *_dumpDict(NSDictionary *dict) {
+    if (!dict) return @"(nil)";
+    NSError *err = nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:dict
+                                                   options:NSJSONWritingPrettyPrinted
+                                                     error:&err];
+    if (data) return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    return [NSString stringWithFormat:@"(non-JSON: %@)", dict.description];
+}
+
 - (BOOL)pushPluginSwizzledApplication:(UIApplication *)application
         didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    NSLog(@"[PushPlugin] swizzledDidFinishLaunching: launchOptions has %lu keys, all keys=%@",
+    NSLog(@"[PushPlugin] swizzledDidFinishLaunching: launchOptions has %lu keys=%@",
           (unsigned long)launchOptions.count, launchOptions.allKeys);
 
     // Capture the launch-time remote notification payload — surviving copy
@@ -100,11 +113,10 @@ static NSDictionary *_pushPluginCapturedLaunchNotification = nil;
     NSDictionary *launchUserInfo = launchOptions[UIApplicationLaunchOptionsRemoteNotificationKey];
     if ([launchUserInfo isKindOfClass:[NSDictionary class]] && launchUserInfo.count > 0) {
         _pushPluginCapturedLaunchNotification = [launchUserInfo copy];
-        NSLog(@"[PushPlugin] swizzledDidFinishLaunching: CAPTURED remote-notification launchOption (%lu keys): %@",
-              (unsigned long)launchUserInfo.count, launchUserInfo);
+        NSLog(@"[PushPlugin] swizzledDidFinishLaunching: CAPTURED remote-notification launchOption:\n%s",
+              [_dumpDict(launchUserInfo) UTF8String]);
     } else {
-        NSLog(@"[PushPlugin] swizzledDidFinishLaunching: no UIApplicationLaunchOptionsRemoteNotificationKey in launchOptions (or empty/wrong type) — value=%@",
-              launchOptions[UIApplicationLaunchOptionsRemoteNotificationKey]);
+        NSLog(@"[PushPlugin] swizzledDidFinishLaunching: no UIApplicationLaunchOptionsRemoteNotificationKey in launchOptions");
     }
     // Call original (this is not recursion — see init swizzle comment above).
     return [self pushPluginSwizzledApplication:application didFinishLaunchingWithOptions:launchOptions];
@@ -113,8 +125,12 @@ static NSDictionary *_pushPluginCapturedLaunchNotification = nil;
 + (NSDictionary *)pushPluginConsumeLaunchNotification {
     NSDictionary *captured = _pushPluginCapturedLaunchNotification;
     _pushPluginCapturedLaunchNotification = nil;
-    NSLog(@"[PushPlugin] +pushPluginConsumeLaunchNotification: returning %@",
-          captured ? @"non-nil payload" : @"nil");
+    if (captured) {
+        NSLog(@"[PushPlugin] +pushPluginConsumeLaunchNotification: returning:\n%s",
+              [_dumpDict(captured) UTF8String]);
+    } else {
+        NSLog(@"[PushPlugin] +pushPluginConsumeLaunchNotification: returning nil (already consumed or never captured)");
+    }
     return captured;
 }
 

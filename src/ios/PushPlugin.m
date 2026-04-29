@@ -29,6 +29,17 @@
 #import "PushPluginSettings.h"
 #import "AppDelegate+PushPlugin.h"
 
+// Dump a dict as a JSON string so iOS Console doesn't redact it as <private>.
+static NSString *_dumpDictAsJSON(NSDictionary *dict) {
+    if (!dict) return @"(nil)";
+    NSError *err = nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:dict
+                                                   options:NSJSONWritingPrettyPrinted
+                                                     error:&err];
+    if (data) return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    return [NSString stringWithFormat:@"(non-JSON: %@)", dict.description];
+}
+
 @interface PushPlugin ()
 
 @property (nonatomic, strong) PushPluginFCM *pushPluginFCM;
@@ -101,7 +112,8 @@
     NSLog(@"[PushPlugin] pluginInitialize: about to consume launch notification");
     NSDictionary *launchUserInfo = [AppDelegate pushPluginConsumeLaunchNotification];
     if (launchUserInfo) {
-        NSLog(@"[PushPlugin] pluginInitialize: RECOVERED cold-start launch notification: %@", launchUserInfo);
+        NSLog(@"[PushPlugin] pluginInitialize: RECOVERED cold-start launch notification:\n%s",
+              [_dumpDictAsJSON(launchUserInfo) UTF8String]);
         NSMutableDictionary *seeded = [launchUserInfo mutableCopy];
         // Mark coldstart on the message so notificationReceived's additionalData
         // shows coldstart=true for this delivery, matching what a
@@ -281,7 +293,8 @@
 - (void)didReceiveRemoteNotification:(NSNotification *)notification {
     NSDictionary *userInfo = notification.userInfo[@"userInfo"];
 
-    NSLog(@"[PushPlugin] Received remote notification (userInfo: %@)", userInfo);
+    NSLog(@"[PushPlugin] didReceiveRemoteNotification — full userInfo:\n%s",
+          [_dumpDictAsJSON(userInfo) UTF8String]);
 
     void (^completionHandler)(UIBackgroundFetchResult) = notification.userInfo[@"completionHandler"];
 
@@ -328,6 +341,8 @@
 
             NSLog(@"[PushPlugin] Stored the completion handler for the background processing of notId %@", notIdKey);
 
+            NSLog(@"[PushPlugin] didReceiveRemoteNotification (silent): OVERWRITING notificationMessage with:\n%s",
+                  [_dumpDictAsJSON(mutableUserInfo) UTF8String]);
             self.notificationMessage = [mutableUserInfo copy];
             self.isInline = NO;
             [self notificationReceived];
@@ -363,9 +378,13 @@
     }
 
     if (self.launchNotification) {
+        NSLog(@"[PushPlugin] pushPluginOnApplicationDidBecomeActive: copying launchNotification → notificationMessage:\n%s",
+              [_dumpDictAsJSON(self.launchNotification) UTF8String]);
         self.notificationMessage = self.launchNotification;
         self.launchNotification = nil;
         [self performSelectorOnMainThread:@selector(notificationReceived) withObject:self waitUntilDone:NO];
+    } else {
+        NSLog(@"[PushPlugin] pushPluginOnApplicationDidBecomeActive: launchNotification is nil, no-op");
     }
 }
 
@@ -427,9 +446,9 @@
     // The original response that comes from the AppDelegate's didReceiveNotificationResponse.
     UNNotificationResponse *response = notification.userInfo[@"response"];
 
-    NSLog(@"[PushPlugin] Notification was received. (actionIdentifier %@, notification: %@)",
+    NSLog(@"[PushPlugin] didReceiveNotificationResponse — actionIdentifier=%@ userInfo:\n%s",
           response.actionIdentifier,
-          response.notification.request.content.userInfo);
+          [_dumpDictAsJSON(response.notification.request.content.userInfo) UTF8String]);
 
     void (^completionHandler)(void) = notification.userInfo[@"completionHandler"];
 
@@ -585,8 +604,8 @@
 
         [message setObject:additionalData forKey:@"additionalData"];
 
-        NSLog(@"[PushPlugin] notificationReceived: SENDING TO JS (callbackId=%@) message=%@",
-              self.callbackId, message);
+        NSLog(@"[PushPlugin] notificationReceived: SENDING TO JS (callbackId=%@):\n%s",
+              self.callbackId, [_dumpDictAsJSON(message) UTF8String]);
         // send notification message
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:message];
         [pluginResult setKeepCallbackAsBool:YES];
