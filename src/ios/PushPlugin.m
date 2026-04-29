@@ -98,15 +98,18 @@
     // didFinishLaunchingWithOptions: and stashes the launch-time userInfo;
     // we consume it once here and seed self.notificationMessage so init's
     // pending-startup-notification path (~line 192) fires it through to JS.
+    NSLog(@"[PushPlugin] pluginInitialize: about to consume launch notification");
     NSDictionary *launchUserInfo = [AppDelegate pushPluginConsumeLaunchNotification];
     if (launchUserInfo) {
-        NSLog(@"[PushPlugin] Recovered cold-start launch notification: %@", launchUserInfo);
+        NSLog(@"[PushPlugin] pluginInitialize: RECOVERED cold-start launch notification: %@", launchUserInfo);
         NSMutableDictionary *seeded = [launchUserInfo mutableCopy];
         // Mark coldstart on the message so notificationReceived's additionalData
         // shows coldstart=true for this delivery, matching what a
         // didReceiveNotificationResponse path would produce.
         self.coldstart = YES;
         self.notificationMessage = [seeded copy];
+    } else {
+        NSLog(@"[PushPlugin] pluginInitialize: no launch notification was captured during didFinishLaunching");
     }
 }
 
@@ -503,7 +506,11 @@
 }
 
 - (void)notificationReceived {
-    NSLog(@"[PushPlugin] Notification received");
+    NSLog(@"[PushPlugin] notificationReceived: hasMessage=%d hasCallbackId=%d coldstart=%d isInline=%d",
+          (self.notificationMessage != nil),
+          (self.callbackId != nil),
+          self.coldstart,
+          self.isInline);
 
     if (self.notificationMessage && self.callbackId != nil)
     {
@@ -578,6 +585,8 @@
 
         [message setObject:additionalData forKey:@"additionalData"];
 
+        NSLog(@"[PushPlugin] notificationReceived: SENDING TO JS (callbackId=%@) message=%@",
+              self.callbackId, message);
         // send notification message
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:message];
         [pluginResult setKeepCallbackAsBool:YES];

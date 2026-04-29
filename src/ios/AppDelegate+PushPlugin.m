@@ -23,6 +23,7 @@ static NSDictionary *_pushPluginCapturedLaunchNotification = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         Class class = [self class];
+        NSLog(@"[PushPlugin] +load: installing swizzles on class %@", NSStringFromClass(class));
 
         // Swizzle init — sets the UNUserNotificationCenter delegate before
         // anything else can fire user-notification callbacks.
@@ -40,6 +41,7 @@ static NSDictionary *_pushPluginCapturedLaunchNotification = nil;
             } else {
                 method_exchangeImplementations(original, swizzled);
             }
+            NSLog(@"[PushPlugin] +load: init swizzle installed (didAdd=%d)", didAddMethod);
         }
 
         // Swizzle application:didFinishLaunchingWithOptions: — captures any
@@ -71,8 +73,9 @@ static NSDictionary *_pushPluginCapturedLaunchNotification = nil;
                 } else {
                     method_exchangeImplementations(original, swizzled);
                 }
+                NSLog(@"[PushPlugin] +load: didFinishLaunchingWithOptions swizzle installed (didAdd=%d)", didAddMethod);
             } else {
-                NSLog(@"[PushPlugin] WARNING: AppDelegate has no application:didFinishLaunchingWithOptions: — cold-start tap payload cannot be captured. (CDVAppDelegate provides one; this is unexpected.)");
+                NSLog(@"[PushPlugin] +load: WARNING — AppDelegate has no application:didFinishLaunchingWithOptions:, cold-start tap payload cannot be captured.");
             }
         }
     });
@@ -88,12 +91,20 @@ static NSDictionary *_pushPluginCapturedLaunchNotification = nil;
 
 - (BOOL)pushPluginSwizzledApplication:(UIApplication *)application
         didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    NSLog(@"[PushPlugin] swizzledDidFinishLaunching: launchOptions has %lu keys, all keys=%@",
+          (unsigned long)launchOptions.count, launchOptions.allKeys);
+
     // Capture the launch-time remote notification payload — surviving copy
     // for the cold-start tap path. Consumed exactly once by
     // PushPlugin.pluginInitialize → +pushPluginConsumeLaunchNotification.
     NSDictionary *launchUserInfo = launchOptions[UIApplicationLaunchOptionsRemoteNotificationKey];
     if ([launchUserInfo isKindOfClass:[NSDictionary class]] && launchUserInfo.count > 0) {
         _pushPluginCapturedLaunchNotification = [launchUserInfo copy];
+        NSLog(@"[PushPlugin] swizzledDidFinishLaunching: CAPTURED remote-notification launchOption (%lu keys): %@",
+              (unsigned long)launchUserInfo.count, launchUserInfo);
+    } else {
+        NSLog(@"[PushPlugin] swizzledDidFinishLaunching: no UIApplicationLaunchOptionsRemoteNotificationKey in launchOptions (or empty/wrong type) — value=%@",
+              launchOptions[UIApplicationLaunchOptionsRemoteNotificationKey]);
     }
     // Call original (this is not recursion — see init swizzle comment above).
     return [self pushPluginSwizzledApplication:application didFinishLaunchingWithOptions:launchOptions];
@@ -102,6 +113,8 @@ static NSDictionary *_pushPluginCapturedLaunchNotification = nil;
 + (NSDictionary *)pushPluginConsumeLaunchNotification {
     NSDictionary *captured = _pushPluginCapturedLaunchNotification;
     _pushPluginCapturedLaunchNotification = nil;
+    NSLog(@"[PushPlugin] +pushPluginConsumeLaunchNotification: returning %@",
+          captured ? @"non-nil payload" : @"nil");
     return captured;
 }
 
