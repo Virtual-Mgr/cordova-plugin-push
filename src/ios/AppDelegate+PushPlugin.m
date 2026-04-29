@@ -10,10 +10,15 @@
 #import <objc/runtime.h>
 #import <os/log.h>
 
+// Bump this on every plugin code change so device-side logs can be
+// cross-checked against what was actually shipped. Must match
+// PPLOG_VERSION in PushPlugin.m.
+#define PPLOG_VERSION "v9-2026-04-27-ttl300"
+
 // Public-tagged log macro — iOS 15+ Console redacts NSLog %@/%s output as
 // <private> by default. os_log with %{public}s explicitly opts out so the
 // diagnostic dumps are actually readable.
-#define PPLOG(fmt, ...) os_log(OS_LOG_DEFAULT, "[PushPlugin] " fmt, ##__VA_ARGS__)
+#define PPLOG(fmt, ...) os_log(OS_LOG_DEFAULT, "[PushPlugin " PPLOG_VERSION "] " fmt, ##__VA_ARGS__)
 
 // Captured during the swizzled didFinishLaunchingWithOptions:. PushPlugin's
 // pluginInitialize consumes this once via +pushPluginConsumeLaunchNotification.
@@ -29,6 +34,7 @@ static NSDictionary *_pushPluginCapturedLaunchNotification = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         Class class = [self class];
+        PPLOG("=== +load: AppDelegate+PushPlugin debug build " PPLOG_VERSION " ===");
         PPLOG("+load: installing swizzles on class %{public}s", [NSStringFromClass(class) UTF8String]);
 
         // Swizzle init — sets the UNUserNotificationCenter delegate before

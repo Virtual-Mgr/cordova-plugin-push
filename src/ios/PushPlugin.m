@@ -30,16 +30,21 @@
 #import "AppDelegate+PushPlugin.h"
 #import <os/log.h>
 
+// Bump this string on every plugin code change so device-side log dumps
+// can be cross-checked against what was actually shipped. Appears on every
+// PPLOG line via the macro prefix.
+#define PPLOG_VERSION "v9-2026-04-27-ttl300"
+
 // Public-tagged log macro — iOS 15+ Console redacts NSLog %@/%s output as
 // <private> by default. os_log with %{public}s explicitly opts out.
-#define PPLOG(fmt, ...) os_log(OS_LOG_DEFAULT, "[PushPlugin] " fmt, ##__VA_ARGS__)
+#define PPLOG(fmt, ...) os_log(OS_LOG_DEFAULT, "[PushPlugin " PPLOG_VERSION "] " fmt, ##__VA_ARGS__)
 
 // Maximum age (seconds) of a captured cold-start tap payload before it's
 // discarded. Cold-start re-delivery re-seeds notificationMessage from the
 // pendingColdStartMessage on each init: call, until either JS ACKs receipt
-// or this TTL expires. 30s comfortably covers vmplayer's slowest bootstrap
-// path (settings page → OAuth → dashboard).
-static const NSTimeInterval PushPluginColdStartTTLSeconds = 30.0;
+// or this TTL expires. 300s covers slow bootstrap paths (settings page →
+// OAuth login → dashboard) where the user may pause to enter credentials.
+static const NSTimeInterval PushPluginColdStartTTLSeconds = 300.0;
 
 // Dump a dict as a JSON string so iOS Console doesn't redact it as <private>.
 static NSString *_dumpDictAsJSON(NSDictionary *dict) {
@@ -88,6 +93,8 @@ static NSString *_dumpDictAsJSON(NSDictionary *dict) {
 @synthesize callbackId;
 
 - (void)pluginInitialize {
+    PPLOG("=== pluginInitialize: PushPlugin debug build " PPLOG_VERSION " (TTL=%.0fs) ===",
+          (double)PushPluginColdStartTTLSeconds);
     self.pushPluginFCM = [[PushPluginFCM alloc] initWithGoogleServicePlist];
 
     if([self.pushPluginFCM isFCMEnabled]) {
